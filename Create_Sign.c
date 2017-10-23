@@ -1,5 +1,8 @@
+// Basic Header
 #include <stdio.h>
+#include <string.h>
 
+// TPM Header
 #include <tss/platform.h>
 #include <tss/tss_defines.h>
 #include <tss/tss_typedef.h>
@@ -8,52 +11,84 @@
 #include <trousers/trousers.h>
 #include <tss/tss_error.h>
 
+// OpenSSL Header
 #include <openssl/sha.h>
 
-#define SIGN_KEY_UUID {0, 0, 0, 0, 0, {0, 0, 0, 5, 16}}
+#define SIGN_KEY_UUID {0, 0, 0, 0, 0, {0, 0, 0, 1, 1}}
 #define DBG(message, tResult) printf("(Line%d, %s) %s returned 0x%08x. %s.\n\n",__LINE__ ,__func__ , message, tResult, (char *)Trspi_Error_String(tResult));
-#define DEBUG 0
+#define DEBUG 1
 
-unsigned char xor_result[20];
-
-int get_hash_value()
+int get_hash_value(unsigned char* xor_result)
 {
-    FILE* fp; // File Pointer
-    int i; // for value
-    unsigned char buf[1024]; // File read date value
-    unsigned char digest[20];
-    SHA_CTX ctx;
+    FILE* fp;
+    int i, j;
+    unsigned char buf[256];
 
-    /// u-boot hash start ///
+	// SHA1 Value
+	SHA_CTX ctx;
+	char sha1_result[3][SHA_DIGEST_LENGTH];
+
+	// SecurePi Serial Number Value
+	char serial[16 + 1];
+
+	// Buffer Init
+	for (i = 0; i < 3; i++)
+		memset(sha1_result[i], 0, 20);
+	memset(buf, 0, sizeof(buf));
+	memset(serial, 0, sizeof(serial));
+
+    // u-boot hash start
     if(!(fp=fopen("/boot/u-boot.bin", "rb")))
     {
-        printf("File open error\n");
+        printf("/boot/u-boot.bin Open Fail\n");
         return 1;
     }
+
     SHA1_Init(&ctx);
     while((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-    {
         SHA1_Update(&ctx, buf, i);
-    }
-    SHA1_Final(xor_result, &ctx);
+    SHA1_Final(sha1_result[0], &ctx);
+
     fclose(fp);
 
-    /// image.fit hash start ///
-    if(!(fp=fopen("/boot/image.fit", "rb")))
-    {
-        printf("File open error\n");
-        return 1;
-    }
+    // image.fit hash start
+	memset(buf, 0, sizeof(buf));
+
+	if (!(fp = fopen("/boot/image.fit", "rb")))
+	{
+		printf("/boot/image.fit Open Fail\n");
+		return 1;
+	}
+
     SHA1_Init(&ctx);
     while((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-    {
         SHA1_Update(&ctx, buf, i);
-    }
-    SHA1_Final(digest, &ctx);
+    SHA1_Final(sha1_result[1], &ctx);
+
     fclose(fp);
 
-    for(i=0; i<20; i++)
-        xor_result[i] = xor_result[i]^digest[i];
+	// Hash SecurePi Serial Number
+	memset(buf, 0, sizeof(buf));
+
+	if (!(fp = fopen("/proc/cpuinfo", "r"))) {
+		printf("/proc/cpuinfo Open Fail\n");
+		return 1;
+	}
+
+	SHA1_Init(&ctx);
+
+	while (fgets(buf, 256, fp))
+		if (strncmp(buf, "Serial", 6) == 0)
+			strcpy(serial, strchr(buf, ':') + 2);
+
+	SHA1_Update(&ctx, buf, i);
+	SHA1_Final(sha1_result[2], &ctx);
+
+	fclose(fp);
+
+	for (i = 0; i < 3; i++)
+		for (j = 0; i < SHA_DIGEST_LENGTH; i++)
+			xor_result[j] = xor_result[j] ^ sha1_result[i][j];
 
     return 0;
 }
@@ -73,6 +108,7 @@ int main(void)
     BYTE *sig, *pubKey;
     UINT32 srk_authusage, sigLen, pubKeySize;
     FILE* fp;
+	unsigned char xor_result[20];
 
     result = Tspi_Context_Create(&hContext);
 #if DEBUG
@@ -88,7 +124,7 @@ int main(void)
 
     result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_RSAKEY, initFlags, &hSigning_key);
 #if DEBUG
-    DBG("Create the key object\n", result);
+    DBG("Create the Signing key object\n", result);
 #endif
     if(result!=0) return 1;
 
@@ -106,39 +142,53 @@ int main(void)
 
     result = Tspi_GetAttribUint32(hSRK, TSS_TSPATTRIB_KEY_INFO, TSS_TSPATTRIB_KEYINFO_AUTHUSAGE, &srk_authusage);
 #if DEBUG
-    DBG("Get Attribute\n", result);
+    DBG("Get SRK Attribute\n", result);
 #endif
     if(result!=0) return 1;
 
     result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE, &hSRKPolicy);
 #if DEBUG
-    DBG("GetPolicyObject\n", result);
+    DBG("Get SRK Policy Object\n", result);
 #endif
     if(result!=0) return 1;
 
-    result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_PLAIN, 10, SRK_PASSWD);
+    result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
 #if DEBUG
     DBG("Set Secret\n", result);
 #endif
     if(result!=0) return 1;
 
-    result = Tspi_Key_CreateKey(hSigning_key, hSRK, 0);
+	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, MY_UUID, &hSigning_key);
+	if (result != 0)
+	{
 #if DEBUG
-    DBG("Create Signing key\n", result);
+		DBG("Signing Key dose not exist\n", result);
 #endif
-    if(result!=0) return 1;
 
-    result = Tspi_Key_LoadKey(hSigning_key, hSRK);
+		result = Tspi_Key_CreateKey(hSigning_key, hSRK, 0);
 #if DEBUG
-    DBG("Load Key\n", result);
+		DBG("Create Signing key\n", result);
 #endif
-    if(result!=0) return 1;
+		if (result != 0) return 1;
 
-    result = Tspi_Context_RegisterKey(hContext, hSigning_key, TSS_PS_TYPE_SYSTEM, MY_UUID, TSS_PS_TYPE_SYSTEM, SRK_UUID);
+		result = Tspi_Key_LoadKey(hSigning_key, hSRK);
 #if DEBUG
-    DBG("Register key\n", result);
+		DBG("Load Key\n", result);
 #endif
-    if(result!=0) return 1;
+		if (result != 0) return 1;
+
+		result = Tspi_Context_RegisterKey(hContext, hSigning_key, TSS_PS_TYPE_SYSTEM, MY_UUID, TSS_PS_TYPE_SYSTEM, SRK_UUID);
+#if DEBUG
+		DBG("Register key\n", result);
+#endif
+		if (result != 0) return 1;
+	}
+	else
+	{
+#if DEBUG
+		DBG("Signing Key exist\n", result);
+#endif
+	}
 
     result = Tspi_Key_GetPubKey(hSigning_key, &pubKeySize, &pubKey);
 #if DEBUG
@@ -146,13 +196,14 @@ int main(void)
 #endif
     if(result!=0) return 1;
 
-    get_hash_value();
-
     result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_HASH, TSS_HASH_SHA1, &hHash);
 #if DEBUG
     DBG("Create Object\n", result);
 #endif
     if(result!=0) return 1;
+
+	// Hash Start
+	get_hash_value(xor_result);
 
     result = Tspi_Hash_SetHashValue(hHash, 20, xor_result);
 #if DEBUG
@@ -172,7 +223,7 @@ int main(void)
 #endif
     if(result!=0) return 1;
 
-    result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_INDEX, 0, 0x10000001);
+    result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_INDEX, 0, 1);
 #if DEBUG
     DBG("Set NVRAM index\n", result);
 #endif
@@ -184,7 +235,7 @@ int main(void)
 #endif
     if(result!=0) return 1;
 
-    result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_DATASIZE, 0, 40);
+    result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_DATASIZE, 0, 256);
 #if DEBUG
     DBG("Set NVRAM size\n", result);
 #endif
@@ -197,10 +248,25 @@ int main(void)
     if(result!=0) return 1;
 
     result = Tspi_NV_DefineSpace(hNVStore, 0, 0);
+	if (result != 0)
+	{
 #if DEBUG
-    DBG("Create NVRAM space\n", result);
+		DBG("Create NVRAM space\n", result);
 #endif
-    if(result!=0) return 1;
+		result = Tspi_NV_ReleaseSpace(hNVStore);
+#if DEBUG
+		DBG("Release NV Space\n", result);
+#endif
+		if (result != 0) return 1;
+		else
+		{
+			result = Tspi_NV_DefineSpace(hNVStore, 0, 0);
+#if DEBUG
+			DBG("Create NVRAM space\n", result);
+#endif
+			if (result != 0) return 1;
+		}
+	}
 
     result = Tspi_NV_WriteValue(hNVStore, 0, sigLen, sig);
 #if DEBUG
@@ -208,11 +274,17 @@ int main(void)
 #endif
     if(result!=0) return 1;
 
-    result = Tspi_Policy_FlushSecret(hSigning_key);
+    result = Tspi_Policy_FlushSecret(hSRKPolicy);
 #if DEBUG
-    DBG("Flush Secret\n", result);
+    DBG("Flush hSRKPolicy Secret\n", result);
 #endif
     if(result!=0) return 1;
+
+	result = Tspi_Policy_FlushSecret(hNVPolicy);
+#if DEBUG
+	DBG("Flush hNVPolicy Secret\n", result);
+#endif
+	if (result != 0) return 1;
 
     result = Tspi_Context_FreeMemory(hContext, NULL);
 #if DEBUG
