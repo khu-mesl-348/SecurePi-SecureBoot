@@ -23,6 +23,14 @@
 #define DBG(message, tResult) printf("(Line%d, %s) %s returned 0x%08x. %s.\n\n",__LINE__ ,__func__ , message, tResult, (char *)Trspi_Error_String(tResult));
 #define DEBUG 1
 
+void TPM_ERROR(int res, char* msg)
+{
+#if DEBUG
+	DBG(msg, res);
+#endif
+	if (res != 0) return 1;
+}
+
 char get_plain(unsigned char ch) {
 	ch = ch % 26;
 	return (char)(97 + (ch) % 26);
@@ -105,7 +113,8 @@ int get_hash_value(unsigned char* xor_result) {
 	return 0;
 }
 
-int verify_Bootloader_Signature(unsigned char* xor_result) {
+int verify_Bootloader_Signature(unsigned char* xor_result)
+{
 	TSS_HCONTEXT hContext;
 	TSS_RESULT result;
 	TSS_HKEY hSRK, hSigning_Key;
@@ -119,197 +128,114 @@ int verify_Bootloader_Signature(unsigned char* xor_result) {
 	UINT32 dataLen = 256, srk_authusage;
 
 	result = Tspi_Context_Create(&hContext);
-#if DEBUG
-	DBG("Create TPM Context\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Create TPM Context\n");
 
 	result = Tspi_Context_Connect(hContext, NULL);
-#if DEBUG
-	DBG("Connect to TPM\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Connect to TPM\n");
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_NV, 0, &hNVStore);
-#if DEBUG
-	DBG("Create NV Object\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Create NVRAM Object\n");
 
 	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_INDEX, 0, 1);
-#if DEBUG
-	DBG("Set NV Index\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Set NVRAM Index\n");
 
 	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_PERMISSIONS, 0, TPM_NV_PER_OWNERWRITE);
-#if DEBUG
-	DBG("Set NV Policy\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Set NVRAM Attribute\n");
 
-	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_DATASIZE, 0, 0x100);
-#if DEBUG
-	DBG("Set NV Data Size\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_DATASIZE, 0, 256);
+	TPM_ERROR(result, "Set NVRAM Data Size\n");
 
 	result = Tspi_NV_ReadValue(hNVStore, 0, &dataLen, &data);
-#if DEBUG
-	DBG("Read Data from NV\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Read Signature in NVRAM\n");
 
 	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
-#if DEBUG
-	DBG("Get SRK Handle\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Get SRK Handle\n");
 
 	result = Tspi_GetAttribUint32(hSRK, TSS_TSPATTRIB_KEY_INFO, TSS_TSPATTRIB_KEYINFO_AUTHUSAGE, &srk_authusage);
-#if DEBUG
-	DBG("Get SRK Attribute\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Get SRK Attribute\n");
 
 	if (srk_authusage)
 	{
 		result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE, &hSRKPolicy);
-#if DEBUG
-		DBG("Get SRK Policy\n", result);
-#endif
-		if (result != 0) return 1;
+		TPM_ERROR(result, "Get SRK Policy\n");
 
 		result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
-#if DEBUG
-		DBG("Set SRK\n", result);
-#endif
-		if (result != 0) return 1;
+		TPM_ERROR(result, "Set SRK Secret\n");
 	}
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_RSAKEY, initFlags, &hSigning_Key);
-#if DEBUG
-	DBG("Create RSA Object\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Create the Signing key Object\n");
 
 	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, MY_UUID, &hSigning_Key);
-#if DEBUG
-	DBG("Load Signing Key\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Load the Signing Key\n")
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_HASH, TSS_HASH_SHA1, &hHash);
-#if DEBUG
-	DBG("Create Hash Object\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Create Hash Object\n");
 
 	result = Tspi_Hash_SetHashValue(hHash, sizeof(xor_result), xor_result);
-#if DEBUG
-	DBG("Set Hash Value\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Set Hash Value for Verifying Signature\n");
 
 	result = Tspi_Hash_VerifySignature(hHash, hSigning_Key, 256, data);
-#if DEBUG
-	DBG("Verify Signature\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Verify Signature\n");
 
 	result = Tspi_Policy_FlushSecret(hSRKPolicy);
-#if DEBUG
-	DBG("Flush hSRKPolicy Secret\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Flush SRKPolicy Secret\n");
 
 	result = Tspi_Policy_FlushSecret(hNVPolicy);
-#if DEBUG
-	DBG("Flush hNVPolicy Secret\n", result);
-#endif
-	if (result != 0) return 1;
+	TPM_ERROR(result, "Flush NVPolicy Secret\n");
 
 	result = Tspi_Context_FreeMemory(hContext, NULL);
-#if DEBUG
-	DBG("Tspi Context Free Memory\n", result);
-#endif
+	TPM_ERROR(result, "Free TPM Memory\n");
 
 	result = Tspi_Context_Close(hContext);
-#if DEBUG
-	DBG("Tspi Context Close\n", result);
-#endif
+	TPM_ERROR(result, "Close TPM\n");
 
 	return 0;
 }
 
 int setSRK(unsigned char* xor_result, unsigned char* SRK_PASSWD)
 {
-	TSS_HTPM hTPM; // TPM value
-	TSS_HPOLICY hTPMPolicy, hNewPolicy; // TPM value configure
-	TSS_HCONTEXT hContext; // TPM Context
-	TSS_RESULT result; // TPM result print using DBG
-	TSS_HKEY hSRK; // TPM SRK value
-	TSS_UUID SRK_UUID = TSS_UUID_SRK; // TPM SRK save location
+	TSS_HTPM hTPM;
+	TSS_HPOLICY hTPMPolicy, hNewPolicy;
+	TSS_HCONTEXT hContext;
+	TSS_RESULT result;
+	TSS_HKEY hSRK;
+	TSS_UUID SRK_UUID = TSS_UUID_SRK;
 
 	createSRK(xor_result, SRK_PASSWD);
 	printf("\n=============\nSRK_PASSWD: %s\n=============\n", SRK_PASSWD);
 
-	result = Tspi_Context_Create(&hContext); // Create TPM Context
-#if DEBUG
-	DBG("Create TPM Context\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Context_Create(&hContext);
+	TPM_ERROR(result, "Create TPM Context\n");
 
-	result = Tspi_Context_Connect(hContext, NULL); // Connect TPM and TPM Context
-#if DEBUG
-	DBG("Connect TPM\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Context_Connect(hContext, NULL);
+	TPM_ERROR(result, "Connect to TPM\n");
 
-	result = Tspi_Context_GetTpmObject(hContext, &hTPM); // TPM Object configure load
-#if DEBUG
-	DBG("Load TPM object configure\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Context_GetTpmObject(hContext, &hTPM);
+	TPM_ERROR(result, "Get TPM Object\n");
 
-	result = Tspi_GetPolicyObject(hTPM, TSS_POLICY_USAGE, &hTPMPolicy); // Get TPM configure
-#if DEBUG
-	DBG("Get TPM configure\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_GetPolicyObject(hTPM, TSS_POLICY_USAGE, &hTPMPolicy);
+	TPM_ERROR(result, "Get TPM Policy\n");
 
-	result = Tspi_Policy_SetSecret(hTPMPolicy, TSS_SECRET_MODE_PLAIN, 1, "1"); // Set SRK
-#if DEBUG
-	DBG("Set SRK\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Policy_SetSecret(hTPMPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
+	TPM_ERROR(result, "Set SRK Secret\n");
 
-	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_POLICY, TSS_POLICY_USAGE, &hNewPolicy); // Create new SRK configure object
-#if DEBUG
-	DBG("Create New SRK configure object\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_POLICY, TSS_POLICY_USAGE, &hNewPolicy);
+	TPM_ERROR(result, "Create New SRK Object\n");
 
-	result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 10, SRK_PASSWD); // Set new SRK Configure
-#if DEBUG
-	DBG("Set New SRK Configure\n", result);
-#endif
-	if (result != 0) return 1;
+	//result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 10, SRK_PASSWD);
+	result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
+	TPM_ERROR(result, "Set New SRK Password\n");
 
-	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK); // Load TPM SRK
-#if DEBUG
-	DBG("Load TPM SRK\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
+	TPM_ERROR(result, "Get SRK Handle\n");
 
-	result = Tspi_ChangeAuth(hSRK, hTPM, hNewPolicy); // Change New SRK PW
-#if DEBUG
-	DBG("Change New SRK PW\n", result);
-#endif
-	if (result != 0) return 1;
+	result = Tspi_ChangeAuth(hSRK, hTPM, hNewPolicy);
+	TPM_ERROR(result, "Set New SRK Password\n");
 
 	return 0;
 }
+
 int main()
 {
 	unsigned char xor_result[20];
@@ -321,12 +247,6 @@ int main()
 		return 1;
 	}
 
-	if (setSRK(xor_result, SRK_PASSWD) != 0)
-	{
-		printf("Set SRK Fali\n");
-		return 1;
-	}
-
 	if (verify_Bootloader_Signature(xor_result) != 0)
 	{
 		printf("Verify Signature Fail\n");
@@ -334,6 +254,12 @@ int main()
 	}
 	else
 		printf("Verify Signature Success\n");
+
+	if (setSRK(xor_result, SRK_PASSWD) != 0)
+	{
+		printf("Set SRK Fali\n");
+		return 1;
+	}
 
     return 0;
 }
