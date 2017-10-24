@@ -1,6 +1,7 @@
 // Basic Header //
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 // FIFO Header -> Share SRK PW //
 #include <sys/types.h>
@@ -23,12 +24,12 @@
 #define DBG(message, tResult) printf("(Line%d, %s) %s returned 0x%08x. %s.\n\n",__LINE__ ,__func__ , message, tResult, (char *)Trspi_Error_String(tResult));
 #define DEBUG 1
 
-void TPM_ERROR(int res, char* msg)
+void TPM_ERROR_PRINT(int res, char* msg)
 {
 #if DEBUG
 	DBG(msg, res);
 #endif
-	if (res != 0) return 1;
+	if (res != 0) exit(1);
 }
 
 char get_plain(unsigned char ch) {
@@ -45,10 +46,10 @@ void createSRK(unsigned char* xor_result, unsigned char* SRK_PASSWD) {
 int get_hash_value(unsigned char* xor_result) {
 	FILE *fp;
 	int i, j;
-	char buf[256];
+	unsigned char buf[256];
 
 	// SHA1 Value
-	SHA_CTX sha1;
+	SHA_CTX ctx;
 	char sha1_result[3][SHA_DIGEST_LENGTH];
 
 	// SecurePi Serial Number Value
@@ -60,54 +61,57 @@ int get_hash_value(unsigned char* xor_result) {
 	memset(buf, 0, sizeof(buf));
 	memset(serial, 0, sizeof(serial));
 
-	if (!(fp = fopen("/boot/u-boot.bin", "rb"))) {
+	if (!(fp = fopen("/boot/u-boot.bin", "rb")))
+	{
 		printf("/boot/u-boot.bin Open Fail\n");
 		return 1;
 	}
 
-	SHA1_Init(&sha1);
+	SHA1_Init(&ctx);
 	while ((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-		SHA1_Update(&sha1, buf, i);
-	SHA1_Final(sha1_result[0], &sha1);
+		SHA1_Update(&ctx, buf, i);
+	SHA1_Final(sha1_result[0], &ctx);
 
 	fclose(fp);
 
 	// Hash image.fit
 	memset(buf, 0, sizeof(buf));
 
-	if (!(fp = fopen("/boot/image.fit", "rb"))) {
+	if (!(fp = fopen("/boot/image.fit", "rb")))
+	{
 		printf("/boot/image.fit Open Fail\n");
 		return 1;
 	}
 
-	SHA1_Init(&sha1);
+	SHA1_Init(&ctx);
 	while ((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-		SHA1_Update(&sha1, buf, i);
-	SHA1_Final(sha1_result[1], &sha1);
+		SHA1_Update(&ctx, buf, i);
+	SHA1_Final(sha1_result[1], &ctx);
 
 	fclose(fp);
 
 	// Hash SecurePi Serial Number
 	memset(buf, 0, sizeof(buf));
 
-	if (!(fp = fopen("/proc/cpuinfo", "r"))) {
+	if (!(fp = fopen("/proc/cpuinfo", "r")))
+	{
 		printf("/proc/cpuinfo Open Fail\n");
 		return 1;
 	}
 
-	SHA1_Init(&sha1);
+	SHA1_Init(&ctx);
 	
 	while (fgets(buf, 256, fp))
 		if (strncmp(buf, "Serial", 6) == 0)
 			strcpy(serial, strchr(buf, ':') + 2);
 
-	SHA1_Update(&sha1, buf, i);
-	SHA1_Final(sha1_result[2], &sha1);
+	SHA1_Update(&ctx, serial, sizeof(serial));
+	SHA1_Final(sha1_result[2], &ctx);
 
 	fclose(fp);
 
 	for (i = 0; i < 3; i++)
-		for (j = 0; j < 20; j++)
+		for (j = 0; j < SHA_DIGEST_LENGTH; j++)
 			xor_result[j] = xor_result[j] ^ sha1_result[i][j];
 
 	return 0;
@@ -128,67 +132,70 @@ int verify_Bootloader_Signature(unsigned char* xor_result)
 	UINT32 dataLen = 256, srk_authusage;
 
 	result = Tspi_Context_Create(&hContext);
-	TPM_ERROR(result, "Create TPM Context\n");
+	TPM_ERROR_PRINT(result, "Create TPM Context\n");
 
 	result = Tspi_Context_Connect(hContext, NULL);
-	TPM_ERROR(result, "Connect to TPM\n");
+	TPM_ERROR_PRINT(result, "Connect to TPM\n");
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_NV, 0, &hNVStore);
-	TPM_ERROR(result, "Create NVRAM Object\n");
+	TPM_ERROR_PRINT(result, "Create NVRAM Object\n");
 
 	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_INDEX, 0, 1);
-	TPM_ERROR(result, "Set NVRAM Index\n");
+	TPM_ERROR_PRINT(result, "Set NVRAM Index\n");
 
 	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_PERMISSIONS, 0, TPM_NV_PER_OWNERWRITE);
-	TPM_ERROR(result, "Set NVRAM Attribute\n");
+	TPM_ERROR_PRINT(result, "Set NVRAM Attribute\n");
 
 	result = Tspi_SetAttribUint32(hNVStore, TSS_TSPATTRIB_NV_DATASIZE, 0, 256);
-	TPM_ERROR(result, "Set NVRAM Data Size\n");
+	TPM_ERROR_PRINT(result, "Set NVRAM Data Size\n");
+
+	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_POLICY, TSS_POLICY_USAGE, &hNVPolicy);
+	TPM_ERROR_PRINT(result, "Set NVRAM Policy\n");
 
 	result = Tspi_NV_ReadValue(hNVStore, 0, &dataLen, &data);
-	TPM_ERROR(result, "Read Signature in NVRAM\n");
+	TPM_ERROR_PRINT(result, "Read Signature in NVRAM\n");
 
 	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
-	TPM_ERROR(result, "Get SRK Handle\n");
+	TPM_ERROR_PRINT(result, "Get SRK Handle\n");
 
 	result = Tspi_GetAttribUint32(hSRK, TSS_TSPATTRIB_KEY_INFO, TSS_TSPATTRIB_KEYINFO_AUTHUSAGE, &srk_authusage);
-	TPM_ERROR(result, "Get SRK Attribute\n");
+	TPM_ERROR_PRINT(result, "Get SRK Attribute\n");
 
 	if (srk_authusage)
 	{
 		result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE, &hSRKPolicy);
-		TPM_ERROR(result, "Get SRK Policy\n");
+		TPM_ERROR_PRINT(result, "Get SRK Policy\n");
 
 		result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
-		TPM_ERROR(result, "Set SRK Secret\n");
+		TPM_ERROR_PRINT(result, "Set SRK Secret\n");
 	}
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_RSAKEY, initFlags, &hSigning_Key);
-	TPM_ERROR(result, "Create the Signing key Object\n");
+	TPM_ERROR_PRINT(result, "Create the Signing key Object\n");
 
 	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, MY_UUID, &hSigning_Key);
-	TPM_ERROR(result, "Load the Signing Key\n")
+	TPM_ERROR_PRINT(result, "Load the Signing Key\n");
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_HASH, TSS_HASH_SHA1, &hHash);
-	TPM_ERROR(result, "Create Hash Object\n");
+	TPM_ERROR_PRINT(result, "Create Hash Object\n");
 
-	result = Tspi_Hash_SetHashValue(hHash, sizeof(xor_result), xor_result);
-	TPM_ERROR(result, "Set Hash Value for Verifying Signature\n");
+	result = Tspi_Hash_SetHashValue(hHash, 20, xor_result);
+	TPM_ERROR_PRINT(result, "Set Hash Value for Verifying Signature\n");
 
 	result = Tspi_Hash_VerifySignature(hHash, hSigning_Key, 256, data);
-	TPM_ERROR(result, "Verify Signature\n");
+	TPM_ERROR_PRINT(result, "Verify Signature\n");
 
 	result = Tspi_Policy_FlushSecret(hSRKPolicy);
-	TPM_ERROR(result, "Flush SRKPolicy Secret\n");
+	TPM_ERROR_PRINT(result, "Flush SRKPolicy Secret\n");
 
 	result = Tspi_Policy_FlushSecret(hNVPolicy);
-	TPM_ERROR(result, "Flush NVPolicy Secret\n");
+	TPM_ERROR_PRINT(result, "Flush NVPolicy Secret\n");
 
 	result = Tspi_Context_FreeMemory(hContext, NULL);
-	TPM_ERROR(result, "Free TPM Memory\n");
+	TPM_ERROR_PRINT(result, "Free TPM Memory\n");
 
 	result = Tspi_Context_Close(hContext);
-	TPM_ERROR(result, "Close TPM\n");
+	TPM_ERROR_PRINT(result, "Close TPM\n");
 
 	return 0;
 }
@@ -203,35 +210,33 @@ int setSRK(unsigned char* xor_result, unsigned char* SRK_PASSWD)
 	TSS_UUID SRK_UUID = TSS_UUID_SRK;
 
 	createSRK(xor_result, SRK_PASSWD);
-	printf("\n=============\nSRK_PASSWD: %s\n=============\n", SRK_PASSWD);
 
 	result = Tspi_Context_Create(&hContext);
-	TPM_ERROR(result, "Create TPM Context\n");
+	TPM_ERROR_PRINT(result, "Create TPM Context\n");
 
 	result = Tspi_Context_Connect(hContext, NULL);
-	TPM_ERROR(result, "Connect to TPM\n");
+	TPM_ERROR_PRINT(result, "Connect to TPM\n");
 
 	result = Tspi_Context_GetTpmObject(hContext, &hTPM);
-	TPM_ERROR(result, "Get TPM Object\n");
+	TPM_ERROR_PRINT(result, "Get TPM Object\n");
 
 	result = Tspi_GetPolicyObject(hTPM, TSS_POLICY_USAGE, &hTPMPolicy);
-	TPM_ERROR(result, "Get TPM Policy\n");
+	TPM_ERROR_PRINT(result, "Get TPM Policy\n");
 
 	result = Tspi_Policy_SetSecret(hTPMPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
-	TPM_ERROR(result, "Set SRK Secret\n");
+	TPM_ERROR_PRINT(result, "Set SRK Secret\n");
 
 	result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_POLICY, TSS_POLICY_USAGE, &hNewPolicy);
-	TPM_ERROR(result, "Create New SRK Object\n");
+	TPM_ERROR_PRINT(result, "Create New SRK Object\n");
 
-	//result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 10, SRK_PASSWD);
-	result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
-	TPM_ERROR(result, "Set New SRK Password\n");
+	result = Tspi_Policy_SetSecret(hNewPolicy, TSS_SECRET_MODE_PLAIN, 10, SRK_PASSWD);
+	TPM_ERROR_PRINT(result, "Set New SRK Password\n");
 
 	result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
-	TPM_ERROR(result, "Get SRK Handle\n");
+	TPM_ERROR_PRINT(result, "Get SRK Handle\n");
 
 	result = Tspi_ChangeAuth(hSRK, hTPM, hNewPolicy);
-	TPM_ERROR(result, "Set New SRK Password\n");
+	TPM_ERROR_PRINT(result, "Set New SRK Password\n");
 
 	return 0;
 }
@@ -240,6 +245,9 @@ int main()
 {
 	unsigned char xor_result[20];
 	unsigned char SRK_PASSWD[20];
+
+	memset(xor_result, 0, 20);
+	memset(SRK_PASSWD, 0, 20);
 
 	if (get_hash_value(xor_result) != 0)
 	{

@@ -12,9 +12,6 @@
 #include <trousers/trousers.h>
 #include <tss/tss_error.h>
 
-// OpenSSL Header
-#include <openssl/sha.h>
-
 #define SIGN_KEY_UUID {0, 0, 0, 0, 0, {0, 0, 0, 1, 1}}
 #define DBG(message, tResult) printf("(Line%d, %s) %s returned 0x%08x. %s.\n\n",__LINE__ ,__func__ , message, tResult, (char *)Trspi_Error_String(tResult));
 #define DEBUG 1
@@ -25,82 +22,6 @@ void TPM_ERROR_PRINT(int res, char* msg)
 	DBG(msg, res);
 #endif
 	if (res != 0) exit(1);
-}
-
-int get_hash_value(unsigned char* xor_result)
-{
-    FILE* fp;
-    int i, j;
-    unsigned char buf[256];
-
-	// SHA1 Value
-	SHA_CTX ctx;
-	char sha1_result[3][SHA_DIGEST_LENGTH];
-
-	// SecurePi Serial Number Value
-	char serial[16 + 1];
-
-	// Buffer Init
-	for (i = 0; i < 3; i++)
-		memset(sha1_result[i], 0, 20);
-	memset(buf, 0, sizeof(buf));
-	memset(serial, 0, sizeof(serial));
-
-    // u-boot hash start
-    if(!(fp=fopen("/boot/u-boot.bin", "rb")))
-    {
-        printf("/boot/u-boot.bin Open Fail\n");
-        return 1;
-    }
-
-    SHA1_Init(&ctx);
-    while((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-        SHA1_Update(&ctx, buf, i);
-    SHA1_Final(sha1_result[0], &ctx);
-
-    fclose(fp);
-
-    // image.fit hash start
-	memset(buf, 0, sizeof(buf));
-
-	if (!(fp = fopen("/boot/image.fit", "rb")))
-	{
-		printf("/boot/image.fit Open Fail\n");
-		return 1;
-	}
-
-    SHA1_Init(&ctx);
-    while((i = fread(buf, 1, sizeof(buf), fp)) > 0)
-        SHA1_Update(&ctx, buf, i);
-    SHA1_Final(sha1_result[1], &ctx);
-
-    fclose(fp);
-
-	// Hash SecurePi Serial Number
-	memset(buf, 0, sizeof(buf));
-
-	if (!(fp = fopen("/proc/cpuinfo", "r")))
-	{
-		printf("/proc/cpuinfo Open Fail\n");
-		return 1;
-	}
-
-	SHA1_Init(&ctx);
-
-	while (fgets(buf, 256, fp))
-		if (strncmp(buf, "Serial", 6) == 0)
-			strcpy(serial, strchr(buf, ':') + 2);
-
-	SHA1_Update(&ctx, serial, sizeof(serial));
-	SHA1_Final(sha1_result[2], &ctx);
-
-	fclose(fp);
-
-	for (i = 0; i < 3; i++)
-		for (j = 0; j < SHA_DIGEST_LENGTH; j++)
-			xor_result[j] = xor_result[j] ^ sha1_result[i][j];
-
-    return 0;
 }
 
 int main(void)
@@ -119,7 +40,6 @@ int main(void)
     FILE* fp;
 	unsigned char xor_result[20];
 
-	memset(xor_result, 0, 20);
     result = Tspi_Context_Create(&hContext);
 	TPM_ERROR_PRINT(result, "Create TPM Context\n");
 
@@ -141,26 +61,8 @@ int main(void)
     result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_PLAIN, 1, "1");
 	TPM_ERROR_PRINT(result, "Set SRK Secret\n");
 
-	result = Tspi_Key_CreateKey(hSigning_key, hSRK, 0);
-	TPM_ERROR_PRINT(result, "Create the Signing Key\n");
-
-	result = Tspi_Key_LoadKey(hSigning_key, hSRK);
-	TPM_ERROR_PRINT(result, "Load the Signing Key Context\n");
-
-	result = Tspi_Context_RegisterKey(hContext, hSigning_key, TSS_PS_TYPE_SYSTEM, MY_UUID, TSS_PS_TYPE_SYSTEM, SRK_UUID);
-	TPM_ERROR_PRINT(result, "Register the Signing Key\n");
-
-    result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_HASH, TSS_HASH_SHA1, &hHash);
-	TPM_ERROR_PRINT(result, "Create Hash Object\n");
-
-	// Hash Start
-	get_hash_value(xor_result);
-
-    result = Tspi_Hash_SetHashValue(hHash, 20, xor_result);
-	TPM_ERROR_PRINT(result, "Set Hash Value for Generating Signature\n");
-
-    result = Tspi_Hash_Sign(hHash, hSigning_key, &signLen, &sign);
-	TPM_ERROR_PRINT(result, "Generate Signature\n");
+	result = Tspi_Context_UnregisterKey(hContext, TSS_PS_TYPE_SYSTEM, MY_UUID, &hSigning_key);
+	TPM_ERROR_PRINT(result, "Unregister the Signing Key\n");
 
     result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_NV, 0, &hNVStore);
 	TPM_ERROR_PRINT(result, "Create NVRAM Object\n");
@@ -177,11 +79,8 @@ int main(void)
     result = Tspi_Context_CreateObject(hContext, TSS_OBJECT_TYPE_POLICY, TSS_POLICY_USAGE, &hNVPolicy);
 	TPM_ERROR_PRINT(result, "Set NVRAM Policy\n");
 
-    result = Tspi_NV_DefineSpace(hNVStore, 0, 0);
-	TPM_ERROR_PRINT(result, "Create NVRAM Space\n");
-
-    result = Tspi_NV_WriteValue(hNVStore, 0, signLen, sign);
-	TPM_ERROR_PRINT(result, "Write Signature in NVRAM\n");
+	result = Tspi_NV_ReleaseSpace(hNVStore);
+	TPM_ERROR_PRINT(result, "Release NVRAM Space\n");
 
     result = Tspi_Policy_FlushSecret(hSRKPolicy);
 	TPM_ERROR_PRINT(result, "Flush SRKPolicy Secret\n");
