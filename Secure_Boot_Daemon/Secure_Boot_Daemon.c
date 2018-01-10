@@ -22,15 +22,16 @@
 // Define Value
 #define SIGN_KEY_UUID {0, 0, 0, 0, 0, {0, 0, 0, 1, 1}}
 #define DBG(message, tResult) printf("(Line%d, %s) %s returned 0x%08x. %s.\n\n",__LINE__ ,__func__ , message, tResult, (char *)Trspi_Error_String(tResult));
-#define DEBUG 1
+#define DEBUG 0
 #define TPM_WELL_KNOWN_KEY_LEN 20
 
-void TPM_ERROR_PRINT(int res, char* msg)
+int TPM_ERROR_PRINT(int res, char* msg)
 {
 #if DEBUG
 	DBG(msg, res);
 #endif
-	if (res != 0) exit(1);
+	if (res != 0) return 1;
+	else return 0;
 }
 
 char get_plain(unsigned char ch) {
@@ -264,11 +265,11 @@ int main()
 
 	if (verify_Bootloader_Signature(xor_result) != 0)
 	{
-		printf("Verify Signature Fail\n");
+		printf("\nVerify Signature Fail\n\n");
 		return 1;
 	}
 	else
-		printf("Verify Signature Success\n");
+		printf("\nVerify Signature Success\n\n");
 
 	if (setSRK(xor_result, SRK_PASSWD) != 0)
 	{
