@@ -9,7 +9,7 @@
 4. uboot 설정
 	- cd /root/securepi/SecurePi_Secure-Boot/uboot
 	- sh ./uboot_config.sh
-5 검증 서명 생성
+5. 검증 서명 생성
 	- cd/root/ securepi/SecurePi_Secure-Boot/Create_Sign
 	- make
 	- ./Create_Sign
